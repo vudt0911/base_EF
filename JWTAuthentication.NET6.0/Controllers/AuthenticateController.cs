@@ -1,7 +1,12 @@
-﻿using JWTAuthentication.NET6._0.Auth;
+﻿using Google.Apis.Auth;
+using Google.Apis.Util;
+using JWTAuthentication.NET6._0.Auth;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Google;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.IdentityModel.Tokens;
+using Newtonsoft.Json.Linq;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
@@ -25,6 +30,80 @@ namespace JWTAuthentication.NET6._0.Controllers
             _roleManager = roleManager;
             _configuration = configuration;
         }
+
+        // get url: https://accounts.google.com/o/oauth2/v2/auth/oauthchooseaccount?response_type=code&client_id=1060492576360-2014e9qibks0v8kko62h0nh051mcboi6.apps.googleusercontent.com&redirect_uri=https://localhost:44368/api/Authenticate/loginGoogle&scope=openid%20profile%20email&service=lso&o2v=2&theme=glif&flowName=GeneralOAuthFlow
+        [HttpGet]
+        [Route("loginGoogle")]
+        public async Task<IActionResult> GoogleResponse([FromQuery] string code)
+        {
+            // get idToken from Google
+            var client = new HttpClient();
+            var tokenRequest = new HttpRequestMessage(HttpMethod.Post, "https://oauth2.googleapis.com/token");
+
+            var redirectUri = "https://localhost:44368/api/Authenticate/loginGoogle";
+            var clientId = _configuration["Authentication:Google:ClientId"];
+            var clientSecret = _configuration["Authentication:Google:ClientSecret"];
+
+            tokenRequest.Content = new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["code"] = code,
+                ["client_id"] = clientId,
+                ["client_secret"] = clientSecret,
+                ["redirect_uri"] = redirectUri,
+                ["grant_type"] = "authorization_code"
+            });
+
+            var tokenResponse = await client.SendAsync(tokenRequest);
+            var responseContent = await tokenResponse.Content.ReadAsStringAsync();
+
+            if (!tokenResponse.IsSuccessStatusCode)
+            {
+                // Handle error
+                return BadRequest(responseContent);
+            }
+
+            var tokenObj = JObject.Parse(responseContent);
+            var idToken = tokenObj.Value<string>("id_token");
+
+            // Validate the Google token
+            var payload = await GoogleJsonWebSignature.ValidateAsync(idToken, new GoogleJsonWebSignature.ValidationSettings()
+            {
+                Audience = new List<string>() { _configuration["Authentication:Google:ClientId"] }
+            });
+
+            // Create claims for the token
+            var authClaims = new List<Claim>
+            {
+                new Claim(ClaimTypes.Email, payload.Email),
+                new Claim(ClaimTypes.Name, payload.Name),
+                // Add any other claims you need
+            };
+
+            var token = GenerateJwtToken(authClaims); // Generate JWT token
+
+            // Return token to the client
+            return Ok(new
+            {
+                token = new JwtSecurityTokenHandler().WriteToken(token),
+                expiration = token.ValidTo
+            });
+        }
+
+        private JwtSecurityToken GenerateJwtToken(List<Claim> claims)
+        {
+            var authSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_configuration["JWT:Secret"]));
+            var token = new JwtSecurityToken(
+                issuer: _configuration["JWT:ValidIssuer"],
+                audience: _configuration["JWT:ValidAudience"],
+                expires: DateTime.Now.AddHours(3),
+                claims: claims,
+                signingCredentials: new SigningCredentials(authSigningKey, SecurityAlgorithms.HmacSha256)
+            );
+
+            return token;
+        }
+
+
 
         [HttpPost]
         [Route("login")]
