@@ -1,8 +1,15 @@
-﻿using Google.Apis.Auth;
+﻿using DocumentFormat.OpenXml.Spreadsheet;
+using Google.Apis.Auth;
 using Google.Apis.Util;
 using JWTAuthentication.NET6._0.Auth;
+using JWTAuthentication.NET6._0.Helpter;
+using JWTAuthentication.NET6._0.Models.Models;
+using JWTAuthentication.NET6._0.Services;
+using JWTAuthentication.NET6._0.Services.Contracts;
+using MailKit;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Google;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.IdentityModel.Tokens;
@@ -20,15 +27,17 @@ namespace JWTAuthentication.NET6._0.Controllers
         private readonly UserManager<IdentityUser> _userManager;
         private readonly RoleManager<IdentityRole> _roleManager;
         private readonly IConfiguration _configuration;
+        private readonly IEmailService _emailService;
 
         public AuthenticateController(
             UserManager<IdentityUser> userManager,
             RoleManager<IdentityRole> roleManager,
-            IConfiguration configuration)
+            IConfiguration configuration, IEmailService emailService)
         {
             _userManager = userManager;
             _roleManager = roleManager;
             _configuration = configuration;
+            _emailService = emailService;
         }
 
         // get url: https://accounts.google.com/o/oauth2/v2/auth/oauthchooseaccount?response_type=code&client_id=1060492576360-2014e9qibks0v8kko62h0nh051mcboi6.apps.googleusercontent.com&redirect_uri=https://localhost:44368/api/Authenticate/loginGoogle&scope=openid%20profile%20email&service=lso&o2v=2&theme=glif&flowName=GeneralOAuthFlow
@@ -95,7 +104,7 @@ namespace JWTAuthentication.NET6._0.Controllers
                 // Add any other claims you need
             };
 
-            var token = GenerateJwtToken(authClaims); // Generate JWT token
+            var token = GetToken(authClaims); // Generate JWT token
 
             // Return token to the client
             return Ok(new
@@ -105,21 +114,80 @@ namespace JWTAuthentication.NET6._0.Controllers
             });
         }
 
-        private JwtSecurityToken GenerateJwtToken(List<Claim> claims)
+        // Oauthe2 login facebook
+        [HttpGet]
+        [Route("loginFacebook")]
+        public IActionResult LoginFacebook()
         {
-            var authSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_configuration["JWT:Secret"]));
-            var token = new JwtSecurityToken(
-                issuer: _configuration["JWT:ValidIssuer"],
-                audience: _configuration["JWT:ValidAudience"],
-                expires: DateTime.Now.AddHours(3),
-                claims: claims,
-                signingCredentials: new SigningCredentials(authSigningKey, SecurityAlgorithms.HmacSha256)
-            );
+            // Thông tin cần thiết cho yêu cầu OAuth 2.0 đến Facebook
+            var clientId = _configuration["Authentication:Facebook:ClientId"];
+            var redirectUri = "https://localhost:44368/api/Authenticate/facebook-response";
+            var scope = "email";
 
-            return token;
+            // Tạo URL yêu cầu OAuth 2.0 đến Facebook
+            var oauthUrl = $"https://www.facebook.com/v11.0/dialog/oauth?client_id={clientId}&redirect_uri={redirectUri}&scope={scope}";
+
+            // Chuyển hướng người dùng đến URL yêu cầu OAuth 2.0
+            return Redirect(oauthUrl);
         }
+        [HttpGet]
+        [Route("facebook-response")]
+        public async Task<IActionResult> FacebookResponse([FromQuery] string code)
+        {
+            // get idToken from Facebook
+            var client = new HttpClient();
+            var tokenRequest = new HttpRequestMessage(HttpMethod.Get, "https://graph.facebook.com/v11.0/oauth/access_token");
 
+            var redirectUri = "https://localhost:44368/api/Authenticate/facebook-response";
+            var clientId = _configuration["Authentication:Facebook:ClientId"];
+            var clientSecret = _configuration["Authentication:Facebook:ClientSecret"];
 
+            tokenRequest.RequestUri = new Uri($"https://graph.facebook.com/v11.0/oauth/access_token?client_id={clientId}&redirect_uri={redirectUri}&client_secret={clientSecret}&code={code}");
+
+            var tokenResponse = await client.SendAsync(tokenRequest);
+            var responseContent = await tokenResponse.Content.ReadAsStringAsync();
+
+            if (!tokenResponse.IsSuccessStatusCode)
+            {
+                // Handle error
+                return BadRequest(responseContent);
+            }
+
+            var tokenObj = JObject.Parse(responseContent);
+            var accessToken = tokenObj.Value<string>("access_token");
+
+            // Get user info from Facebook
+            var userInfoRequest = new HttpRequestMessage(HttpMethod.Get, "https://graph.facebook.com/me?fields=id,name,email");
+            userInfoRequest.Headers.Add("Authorization", $"Bearer {accessToken}");
+
+            var userInfoResponse = await client.SendAsync(userInfoRequest);
+            var userInfoContent = await userInfoResponse.Content.ReadAsStringAsync();
+
+            if (!userInfoResponse.IsSuccessStatusCode)
+            {
+                // Handle error
+                return BadRequest(userInfoContent);
+            }
+
+            var userInfoObj = JObject.Parse(userInfoContent);
+
+            // Create claims for the token
+            var authClaims = new List<Claim>
+            {
+                new Claim(ClaimTypes.Email, userInfoObj.Value<string>("email")),
+                new Claim(ClaimTypes.Name, userInfoObj.Value<string>("name")),
+                // Add any other claims you need
+            };
+
+            var token = GetToken(authClaims); // Generate JWT token
+
+            // Return token to the client
+            return Ok(new
+            {
+                token = new JwtSecurityTokenHandler().WriteToken(token),
+                expiration = token.ValidTo
+            });
+        }
 
         [HttpPost]
         [Route("login")]
@@ -141,7 +209,7 @@ namespace JWTAuthentication.NET6._0.Controllers
                     authClaims.Add(new Claim(ClaimTypes.Role, userRole));
                 }
 
-               var token = GetToken(authClaims);
+                var token = GetToken(authClaims);
 
                 return Ok(new
                 {
@@ -170,6 +238,16 @@ namespace JWTAuthentication.NET6._0.Controllers
             if (!result.Succeeded)
                 return StatusCode(StatusCodes.Status500InternalServerError, new Response { Status = "Error", Message = "User creation failed! Please check user details and try again." });
 
+            /*if (!await _roleManager.RoleExistsAsync(UserRoles.Admin))
+                await _roleManager.CreateAsync(new IdentityRole(UserRoles.Admin));
+            if (!await _roleManager.RoleExistsAsync(UserRoles.User))
+                await _roleManager.CreateAsync(new IdentityRole(UserRoles.User));*/
+
+            // set role for user
+            if (await _roleManager.RoleExistsAsync(UserRoles.User))
+            {
+                await _userManager.AddToRoleAsync(user, UserRoles.User);
+            }
             return Ok(new Response { Status = "Success", Message = "User created successfully!" });
         }
 
@@ -191,19 +269,12 @@ namespace JWTAuthentication.NET6._0.Controllers
             if (!result.Succeeded)
                 return StatusCode(StatusCodes.Status500InternalServerError, new Response { Status = "Error", Message = "User creation failed! Please check user details and try again." });
 
-            if (!await _roleManager.RoleExistsAsync(UserRoles.Admin))
-                await _roleManager.CreateAsync(new IdentityRole(UserRoles.Admin));
-            if (!await _roleManager.RoleExistsAsync(UserRoles.User))
-                await _roleManager.CreateAsync(new IdentityRole(UserRoles.User));
-
+            // set role for admin
             if (await _roleManager.RoleExistsAsync(UserRoles.Admin))
             {
                 await _userManager.AddToRoleAsync(user, UserRoles.Admin);
             }
-            if (await _roleManager.RoleExistsAsync(UserRoles.Admin))
-            {
-                await _userManager.AddToRoleAsync(user, UserRoles.User);
-            }
+
             return Ok(new Response { Status = "Success", Message = "User created successfully!" });
         }
 
@@ -220,6 +291,55 @@ namespace JWTAuthentication.NET6._0.Controllers
                 );
 
             return token;
+        }
+
+        [HttpPost]
+        [Route("send-mail-forgot-password")]
+        public async Task<IActionResult> SendMailForgotPassword([FromBody] ForgotPasswordModel model)
+        {
+            if (!ModelState.IsValid)
+                return BadRequest();
+
+            var user = await _userManager.FindByEmailAsync(model.Email);
+            if (user == null)
+                return StatusCode(StatusCodes.Status500InternalServerError, new Response { Status = "Error", Message = "User not found!" });
+
+            var token = await _userManager.GeneratePasswordResetTokenAsync(user);
+
+            try
+            {
+                Mailrequest mailrequest = new Mailrequest();
+                mailrequest.ToEmail = model.Email;
+                mailrequest.Subject = "Send mail forgot password";
+                mailrequest.Body = _emailService.GetHtmlcontent(model.ClientURI + "?token=" + token);
+                await (_emailService as SendMailForgotPass)?.SendEmailAsync(mailrequest);
+                return Ok(new Response { Status = "Success", Message = "Reset password link has been sent to your email." });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(StatusCodes.Status500InternalServerError, ex.Message);
+            }
+        }
+
+        [HttpPost]
+        [Route("reset-password")]
+        /*[Authorize(Roles = $"{UserRoles.User}, {UserRoles.Admin}")]*/
+        public async Task<IActionResult> ResetPassword([FromHeader(Name = "Authorization")] string authorizationHeader, [FromBody] ResetPasswordModel model)
+        {
+            if (!ModelState.IsValid)
+                return BadRequest();
+
+            var user = await _userManager.FindByEmailAsync(model.Email);
+            if (user == null)
+                return StatusCode(StatusCodes.Status500InternalServerError, new Response { Status = "Error", Message = "User not found!" });
+
+            var token = authorizationHeader?.Replace("Bearer ", "");
+
+            var resetPassResult = await _userManager.ResetPasswordAsync(user, token, model.Password);
+            if (!resetPassResult.Succeeded)
+                return StatusCode(StatusCodes.Status500InternalServerError, new Response { Status = "Error", Message = "Reset password failed!" });
+
+            return Ok(new Response { Status = "Success", Message = "Reset password successful!" });
         }
     }
 }

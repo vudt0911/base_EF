@@ -25,6 +25,7 @@ ConfigurationManager configuration = builder.Configuration;
 // For Email
 builder.Services.Configure<EmailSettings>(builder.Configuration.GetSection("EmailSettings"));
 builder.Services.AddTransient<IEmailService, EmailService>();
+builder.Services.AddTransient<IEmailService, SendMailForgotPass>();
 
 // For Entity Framework
 builder.Services.AddDbContext<ApplicationDbContext>(options => options.UseSqlServer(configuration.GetConnectionString("ConnStr")));
@@ -68,11 +69,17 @@ builder.Services.AddAuthentication(options =>
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(configuration["JWT:Secret"]))
         };
     })
-    // add login for goole and facebook
+    // add login for goole
     .AddGoogle(googleOptions =>
     {
         googleOptions.ClientId = configuration["Authentication:Google:ClientId"];
         googleOptions.ClientSecret = configuration["Authentication:Google:ClientSecret"];
+    })
+    // add login for facebook
+    .AddFacebook(facebookOptions =>
+    {
+        facebookOptions.AppId = configuration["Authentication:Facebook:ClientId"];
+        facebookOptions.AppSecret = configuration["Authentication:Facebook:ClientSecret"];
     });
 
 builder.Services.AddControllers();
@@ -83,6 +90,9 @@ builder.Services.AddSwaggerGen();
 builder.Services.AddAutoMapper(AppDomain.CurrentDomain.GetAssemblies());
 
 var app = builder.Build();
+
+// Ensure roles created
+CreateRolesAsync(app.Services).GetAwaiter().GetResult();
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
@@ -129,3 +139,25 @@ app.UseMiddleware<OutlineMiddleware>();*/
 app.MapControllers();
 
 app.Run();
+
+async Task CreateRolesAsync(IServiceProvider serviceProvider)
+{
+    // Tạo scope mới
+    using (var scope = serviceProvider.CreateScope())
+    {
+        var scopedServices = scope.ServiceProvider;
+        var roleManager = scopedServices.GetRequiredService<RoleManager<IdentityRole>>();
+
+        string[] roleNames = { UserRoles.Admin, UserRoles.User };
+
+        foreach (var roleName in roleNames)
+        {
+            var roleExists = await roleManager.RoleExistsAsync(roleName);
+
+            if (!roleExists)
+            {
+                await roleManager.CreateAsync(new IdentityRole(roleName));
+            }
+        }
+    }
+}

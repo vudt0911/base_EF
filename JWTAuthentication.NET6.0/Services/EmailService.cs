@@ -39,14 +39,14 @@ namespace JWTAuthentication.NET6._0.Services
             Response += "</div>";
             Response += "<div class=\"wrapper\">";
             Response += "<div class=\"container\">";
-            Response += "<div class=\"title\" style=\"color: #343434; margin-top: 3rem\">[Authentication number information]</div>";
+            Response += "<div class=\"title\" style=\"color: #343434; margin-top: 3rem\">[Verify email to change password]</div>";
             Response += "<div class=\"content\" style=\"color: #343434; text-align: center\">";
-            Response += "Photoism will send you a number for authentication. <br />";
-            Response += "Please check the verification number and complete email verification.";
+            Response += "C# will send you a email for authentication. <br />";
+            Response += "Please click the confirm password change button to change your password.";
             Response += "</div>";
             Response += "<div class=\"content\" style=\"color: #343434; text-align: center\">";
             Response += "Hello. This is Photoism. <br />";
-            Response += "Please enter the verification number below and proceed with membership registration.";
+            Response += "Please click the verification button below.";
             Response += "</div>";
             Response += "<a href=\"#\">";
             Response += "<button class=\"btn-submit\" style=\"cursor: pointer; background: blue; border-radius: 8px\">";
