@@ -34,13 +34,29 @@ namespace JWTAuthentication.NET6._0.Controllers
         // get url: https://accounts.google.com/o/oauth2/v2/auth/oauthchooseaccount?response_type=code&client_id=1060492576360-2014e9qibks0v8kko62h0nh051mcboi6.apps.googleusercontent.com&redirect_uri=https://localhost:44368/api/Authenticate/loginGoogle&scope=openid%20profile%20email&service=lso&o2v=2&theme=glif&flowName=GeneralOAuthFlow
         [HttpGet]
         [Route("loginGoogle")]
+        public IActionResult LoginGoogle()
+        {
+            // Thông tin cần thiết cho yêu cầu OAuth 2.0 đến Google
+            var clientId = _configuration["Authentication:Google:ClientId"];
+            var redirectUri = "https://localhost:44368/api/Authenticate/google-response";
+            var scope = "openid profile email";
+
+            // Tạo URL yêu cầu OAuth 2.0 đến Google
+            var oauthUrl = $"https://accounts.google.com/o/oauth2/v2/auth?response_type=code&client_id={clientId}&redirect_uri={redirectUri}&scope={scope}";
+
+            // Chuyển hướng người dùng đến URL yêu cầu OAuth 2.0
+            return Redirect(oauthUrl);
+        }
+
+        [HttpGet]
+        [Route("google-response")]
         public async Task<IActionResult> GoogleResponse([FromQuery] string code)
         {
             // get idToken from Google
             var client = new HttpClient();
             var tokenRequest = new HttpRequestMessage(HttpMethod.Post, "https://oauth2.googleapis.com/token");
 
-            var redirectUri = "https://localhost:44368/api/Authenticate/loginGoogle";
+            var redirectUri = "https://localhost:44368/api/Authenticate/google-response";
             var clientId = _configuration["Authentication:Google:ClientId"];
             var clientSecret = _configuration["Authentication:Google:ClientSecret"];
 
